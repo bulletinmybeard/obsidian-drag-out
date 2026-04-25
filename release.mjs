@@ -21,6 +21,7 @@ const RELEASE_FILES = ["main.js", "manifest.json", "icon.png"];
 
 // --- 1. Read target version from package.json ------------------------------
 const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+const manifest = JSON.parse(readFileSync("manifest.json", "utf8"));
 const minAppVersion = manifest.minAppVersion;
 if (!minAppVersion || typeof minAppVersion !== "string") {
     console.error("manifest.json has no valid 'minAppVersion'. Aborting.");
@@ -34,7 +35,6 @@ if (!version) {
 console.log(`Releasing version ${version}\n`);
 
 // --- 2. Sync manifest.json -------------------------------------------------
-const manifest = JSON.parse(readFileSync("manifest.json", "utf8"));
 const previousManifestVersion = manifest.version;
 manifest.version = version;
 writeFileSync("manifest.json", JSON.stringify(manifest, null, 2) + "\n");
