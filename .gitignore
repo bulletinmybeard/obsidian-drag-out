@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+ 
+# Build output staging directory
+# (main.js itself IS committed — convention for Obsidian plugins so you
+# can clone the repo and drop it directly into plugins folder)
+dist/
+ 
+# Bun lockfile is binary; keep it for reproducibility but no other lockfiles
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+ 
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+ 
+# Logs
+*.log
+npm-debug.log*
+bun-debug.log*
+ 
+# Runtime data Obsidian generates
+data.json
+
+# Internal development docs
+DEVELOPMENT.md
