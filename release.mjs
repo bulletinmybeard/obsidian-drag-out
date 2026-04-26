@@ -8,16 +8,23 @@
  *   2. Sync into manifest.json
  *   3. Add entry to versions.json (mapping version -> manifest.minAppVersion)
  *   4. Run production build
- *   5. Copy release artifacts into dist/<version>/
+ *   5. Freshly stage release artifacts into dist/<version>/
+ *   6. Optionally create/update the GitHub Release assets
  *
  * Usage:  bun run release
+ *         bun run release:github
  */
 
-import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 
-const RELEASE_FILES = ["main.js", "manifest.json", "icon.png"];
+const RELEASE_FILES = [
+    { path: "main.js", required: true },
+    { path: "manifest.json", required: true },
+    { path: "icon.png", required: false },
+];
+const shouldPublishGithubRelease = process.argv.includes("--github");
 
 // --- 1. Read target version from package.json ------------------------------
 const pkg = JSON.parse(readFileSync("package.json", "utf8"));
@@ -32,6 +39,7 @@ if (!version) {
     console.error("package.json has no 'version' field. Aborting.");
     process.exit(1);
 }
+const tagName = version;
 console.log(`Releasing version ${version}\n`);
 
 // --- 2. Sync manifest.json -------------------------------------------------
@@ -61,21 +69,25 @@ try {
 
 // --- 5. Copy artifacts to dist/<version>/ ----------------------------------
 const distDir = join("dist", version);
+rmSync(distDir, { recursive: true, force: true });
 mkdirSync(distDir, { recursive: true });
 
 console.log(`\nStaging release files in ${distDir}/`);
 const missingRequired = [];
 const missingOptional = [];
-for (const file of RELEASE_FILES) {
+const stagedReleaseFiles = [];
+for (const { path: file, required } of RELEASE_FILES) {
     if (!existsSync(file)) {
-        if (file === "icon.png") {
-            missingOptional.push(file);
-        } else {
+        if (required) {
             missingRequired.push(file);
+        } else {
+            missingOptional.push(file);
         }
         continue;
     }
-    copyFileSync(file, join(distDir, file));
+    const stagedFile = join(distDir, file);
+    copyFileSync(file, stagedFile);
+    stagedReleaseFiles.push(stagedFile);
     console.log(`  ${file}`);
 }
 
@@ -87,6 +99,46 @@ if (missingRequired.length > 0) {
     process.exit(1);
 }
 
+// --- 6. Optionally create/update GitHub Release assets ----------------------
+if (shouldPublishGithubRelease) {
+    console.log(`\nPublishing GitHub Release assets for tag ${tagName}...`);
+    try {
+        execFileSync("gh", ["release", "view", tagName], { stdio: "ignore" });
+        execFileSync(
+            "gh",
+            ["release", "upload", tagName, ...stagedReleaseFiles, "--clobber"],
+            { stdio: "inherit" }
+        );
+    } catch {
+        try {
+            execFileSync(
+                "gh",
+                [
+                    "release",
+                    "create",
+                    tagName,
+                    ...stagedReleaseFiles,
+                    "--title",
+                    tagName,
+                    "--generate-notes",
+                    "--verify-tag",
+                ],
+                { stdio: "inherit" }
+            );
+        } catch {
+            console.error(`
+ERROR: could not create or update the GitHub Release.
+
+Make sure:
+  - GitHub CLI is installed and authenticated (gh auth status)
+  - the tag ${tagName} exists on GitHub (git push origin ${tagName})
+  - you have release permissions for this repo
+`);
+            process.exit(1);
+        }
+    }
+}
+
 // --- Done ------------------------------------------------------------------
 console.log(`
 Release ${version} prepared.
@@ -94,10 +146,14 @@ Release ${version} prepared.
 Next steps:
   git add -A
   git commit -m "Release ${version}"
-  git push && git push --tags
-  
-Then on GitHub:
-  - Draft a new release at tag v${version}
+  git tag ${tagName}        # if this tag does not already exist
+  git push && git push origin ${tagName}
+
+Then create/update the GitHub Release assets:
+  bun run release:github
+
+Or manually on GitHub:
+  - Draft a new release at tag ${tagName}
   - Attach release files from ${distDir}/ as LOOSE assets (main.js, manifest.json, and icon.png if present; do not zip)
   - Publish
 `);
