@@ -15,7 +15,7 @@
  *         bun run release --bump minor
  *         bun run release --dry-run
  *         bun run release:github
- *         bun run release:github --version 0.1.2
+ *         bun run release:github --version 0.1.2 --push --move-tag
  */
 
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, rmSync } from "node:fs";
@@ -29,6 +29,8 @@ const RELEASE_FILES = [
 ];
 const shouldPublishGithubRelease = process.argv.includes("--github");
 const isDryRun = process.argv.includes("--dry-run");
+const shouldPushBranch = process.argv.includes("--push");
+const shouldMoveTag = process.argv.includes("--move-tag");
 
 function logDryRun(message) {
     if (isDryRun) {
@@ -156,6 +158,63 @@ function ensureRemoteTag(tagName) {
     runCommand("git", ["push", "origin", tagName], { stdio: "inherit" });
 }
 
+function getCurrentBranch() {
+    const branch = execFileSync("git", ["branch", "--show-current"], {
+        encoding: "utf8",
+    }).trim();
+
+    if (!branch) {
+        throw new Error("not on a branch; cannot push current branch");
+    }
+
+    return branch;
+}
+
+function pushCurrentBranch() {
+    const branch = getCurrentBranch();
+    if (!isWorkingTreeClean()) {
+        console.warn(
+            "  working tree is not clean; git push will only include committed changes"
+        );
+    }
+
+    console.log(`  pushing branch ${branch}`);
+    runCommand("git", ["push", "origin", branch], { stdio: "inherit" });
+}
+
+function moveAndPushTag(tagName) {
+    if (isDryRun) {
+        logDryRun(`would require a clean working tree before moving tag ${tagName}`);
+        logDryRun(`would run: git tag -f ${tagName} HEAD`);
+        logDryRun(`would run: git push origin ${tagName} --force`);
+        return;
+    }
+
+    if (!isWorkingTreeClean()) {
+        throw new Error(
+            `refusing to move tag ${tagName}; commit or discard local changes first`
+        );
+    }
+
+    if (hasRemoteTag(tagName)) {
+        console.warn(
+            `  moving existing remote tag ${tagName}; GitHub source archives will point to HEAD`
+        );
+    } else if (hasLocalTag(`v${tagName}`)) {
+        console.warn(
+            `  found local tag v${tagName}; creating Obsidian-compatible tag ${tagName}`
+        );
+    } else {
+        console.log(`  creating local tag ${tagName}`);
+    }
+
+    runCommand("git", ["tag", "-f", tagName, "HEAD"], { stdio: "inherit" });
+    console.log(`  force-pushing tag ${tagName} to origin`);
+    runCommand("git", ["push", "origin", tagName, "--force"], {
+        stdio: "inherit",
+    });
+}
+
 // --- 1. Read target version from package.json ------------------------------
 const pkg = JSON.parse(readFileSync("package.json", "utf8"));
 const manifest = JSON.parse(readFileSync("manifest.json", "utf8"));
@@ -268,7 +327,28 @@ if (missingRequired.length > 0) {
     process.exit(1);
 }
 
-// --- 6. Optionally create/update GitHub Release assets ----------------------
+// --- 6. Optionally push branch and move tag ---------------------------------
+if (shouldPushBranch || shouldMoveTag) {
+    console.log("\nPublishing git refs...");
+    try {
+        if (shouldPushBranch) {
+            pushCurrentBranch();
+        } else if (shouldMoveTag) {
+            console.warn(
+                "  --move-tag was provided without --push; branch changes may remain unpushed"
+            );
+        }
+
+        if (shouldMoveTag) {
+            moveAndPushTag(tagName);
+        }
+    } catch (err) {
+        console.error(`\nERROR: ${err.message}`);
+        process.exit(1);
+    }
+}
+
+// --- 7. Optionally create/update GitHub Release assets ----------------------
 if (shouldPublishGithubRelease) {
     console.log(`\nPublishing GitHub Release assets for tag ${tagName}...`);
     if (isDryRun) {
@@ -323,17 +403,11 @@ Make sure:
 console.log(`
 Release ${targetVersion} prepared.
 
-Next steps:
+Typical next steps for a new release:
   git add -A
   git commit -m "Release ${targetVersion}"
-  git tag ${tagName}        # if this tag does not already exist
-  git push && git push origin ${tagName}
+  bun run release:github --version ${targetVersion} --push --move-tag
 
-Then create/update the GitHub Release assets:
-  bun run release:github
-
-Or manually on GitHub:
-  - Draft a new release at tag ${tagName}
-  - Attach release files from ${distDir}/ as LOOSE assets (main.js, manifest.json, and icon.png if present; do not zip)
-  - Publish
+To refresh this existing release after committing code changes:
+  bun run release:github --version ${targetVersion} --push --move-tag
 `);
