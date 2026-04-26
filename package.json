@@ -1,6 +1,6 @@
 {
   "name": "obsidian-drag-out",
-  "version": "0.1.3",
+  "version": "0.1.2",
   "description": "Drag files from Obsidian's file explorer to other applications (local filesystem, browser uploads, email attachments, etc.) with native OS drag handles instead of obsidian:// URIs.",
   "main": "main.js",
   "scripts": {
