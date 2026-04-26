@@ -24,7 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for better popout window compatibility.
 - Expanded release automation to bump versions without Bun's prefixed git tags,
   refresh existing GitHub release assets, and publish loose release files with
-  the GitHub CLI.
+  the GitHub CLI, including optional branch pushes and explicit tag moves for
+  updating GitHub's generated source archives.
 - Added a release dry-run mode to preview version, build, staging, tag, and
   GitHub release actions without changing files or assets.
 - Reworked the README for a public audience, including current usage defaults,
