@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && bun esbuild.config.mjs production",
+    "lint": "eslint main.ts manifest.json LICENSE --no-warn-ignored",
     "release": "bun release.mjs"
   },
   "keywords": ["obsidian", "plugin", "drag-and-drop"],
@@ -14,9 +15,12 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "@typescript-eslint/parser": "^8.33.1",
     "builtin-modules": "3.3.0",
     "electron": "^39.0.0",
     "esbuild": "0.24.0",
+    "eslint": "^9.39.4",
+    "eslint-plugin-obsidianmd": "^0.2.4",
     "obsidian": "^1.4.11",
     "tslib": "2.7.0",
     "typescript": "5.5.4"
