@@ -1,18 +1,21 @@
 /*
  * release.mjs
  *
- * Run after bumping the version in package.json (e.g. via `bun pm version patch`).
+ * Bumps package.json unless --version is supplied to refresh an existing release.
  *
  * Steps:
- *   1. Read version from package.json
- *   2. Sync into manifest.json
+ *   1. Resolve the target version (--version, or --bump with patch default)
+ *   2. Sync into package.json and manifest.json
  *   3. Add entry to versions.json (mapping version -> manifest.minAppVersion)
  *   4. Run production build
  *   5. Freshly stage release artifacts into dist/<version>/
  *   6. Optionally create/update the GitHub Release assets
  *
  * Usage:  bun run release
+ *         bun run release --bump minor
+ *         bun run release --dry-run
  *         bun run release:github
+ *         bun run release:github --version 0.1.2
  */
 
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, rmSync } from "node:fs";
@@ -25,6 +28,133 @@ const RELEASE_FILES = [
     { path: "icon.png", required: false },
 ];
 const shouldPublishGithubRelease = process.argv.includes("--github");
+const isDryRun = process.argv.includes("--dry-run");
+
+function logDryRun(message) {
+    if (isDryRun) {
+        console.log(`  [dry-run] ${message}`);
+    }
+}
+
+function writeJsonFile(file, value) {
+    const json = JSON.stringify(value, null, 2) + "\n";
+    if (isDryRun) {
+        logDryRun(`would write ${file}`);
+        return;
+    }
+
+    writeFileSync(file, json);
+}
+
+function runCommand(command, args, options = {}) {
+    if (isDryRun) {
+        logDryRun(`would run: ${[command, ...args].join(" ")}`);
+        return undefined;
+    }
+
+    return execFileSync(command, args, options);
+}
+
+function readArgValue(name) {
+    const equalsArg = process.argv.find((arg) => arg.startsWith(`${name}=`));
+    if (equalsArg) {
+        return equalsArg.slice(name.length + 1);
+    }
+
+    const argIndex = process.argv.indexOf(name);
+    if (argIndex >= 0) {
+        return process.argv[argIndex + 1];
+    }
+
+    return undefined;
+}
+
+function parseStableVersion(version) {
+    const match = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
+    if (!match) {
+        throw new Error(`version ${version} is not a stable semver version`);
+    }
+
+    return {
+        major: Number(match[1]),
+        minor: Number(match[2]),
+        patch: Number(match[3]),
+    };
+}
+
+function bumpVersion(version, bumpType) {
+    const parsed = parseStableVersion(version);
+
+    switch (bumpType) {
+        case "patch":
+            return `${parsed.major}.${parsed.minor}.${parsed.patch + 1}`;
+        case "minor":
+            return `${parsed.major}.${parsed.minor + 1}.0`;
+        case "major":
+            return `${parsed.major + 1}.0.0`;
+        default:
+            throw new Error(
+                `unsupported bump type ${bumpType}; use patch, minor, or major`
+            );
+    }
+}
+
+function hasRemoteTag(tagName) {
+    try {
+        execFileSync(
+            "git",
+            ["ls-remote", "--exit-code", "--tags", "origin", `refs/tags/${tagName}`],
+            { stdio: "ignore" }
+        );
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function hasLocalTag(tagName) {
+    try {
+        execFileSync("git", ["rev-parse", "--verify", `refs/tags/${tagName}`], {
+            stdio: "ignore",
+        });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function isWorkingTreeClean() {
+    const status = execFileSync("git", ["status", "--porcelain"], {
+        encoding: "utf8",
+    });
+    return status.trim().length === 0;
+}
+
+function ensureRemoteTag(tagName) {
+    if (hasRemoteTag(tagName)) {
+        return;
+    }
+
+    if (!hasLocalTag(tagName)) {
+        if (!isWorkingTreeClean()) {
+            throw new Error(
+                `tag ${tagName} does not exist locally and the working tree is not clean`
+            );
+        }
+
+        if (hasLocalTag(`v${tagName}`)) {
+            console.warn(
+                `  found local tag v${tagName}; creating Obsidian-compatible tag ${tagName}`
+            );
+        } else {
+            console.log(`  creating local tag ${tagName}`);
+        }
+        runCommand("git", ["tag", tagName], { stdio: "inherit" });
+    }
+
+    console.log(`  pushing local tag ${tagName} to origin`);
+    runCommand("git", ["push", "origin", tagName], { stdio: "inherit" });
+}
 
 // --- 1. Read target version from package.json ------------------------------
 const pkg = JSON.parse(readFileSync("package.json", "utf8"));
@@ -39,38 +169,73 @@ if (!version) {
     console.error("package.json has no 'version' field. Aborting.");
     process.exit(1);
 }
-const tagName = version;
-console.log(`Releasing version ${version}\n`);
+const explicitVersion = readArgValue("--version");
+const bumpType = readArgValue("--bump") ?? "patch";
+let targetVersion;
+if (explicitVersion) {
+    targetVersion = explicitVersion;
+} else {
+    try {
+        targetVersion = bumpVersion(version, bumpType);
+    } catch (err) {
+        console.error(`\nERROR: ${err.message}`);
+        process.exit(1);
+    }
+}
+const tagName = targetVersion;
+console.log(`Releasing version ${targetVersion}\n`);
+if (isDryRun) {
+    console.log("Dry run enabled; no files, tags, releases, or assets will be changed.\n");
+}
+if (explicitVersion) {
+    if (targetVersion !== version) {
+        console.log(`  package.json remains at ${version}; staging ${targetVersion}`);
+    }
+} else {
+    const previousPackageVersion = pkg.version;
+    pkg.version = targetVersion;
+    writeJsonFile("package.json", pkg);
+    console.log(`  package.json: ${previousPackageVersion} -> ${targetVersion}`);
+}
 
 // --- 2. Sync manifest.json -------------------------------------------------
 const previousManifestVersion = manifest.version;
-manifest.version = version;
-writeFileSync("manifest.json", JSON.stringify(manifest, null, 2) + "\n");
-console.log(`  manifest.json: ${previousManifestVersion} -> ${version}`);
+manifest.version = targetVersion;
+writeJsonFile("manifest.json", manifest);
+console.log(`  manifest.json: ${previousManifestVersion} -> ${targetVersion}`);
 
 // --- 3. Update versions.json -----------------------------------------------
 const versions = JSON.parse(readFileSync("versions.json", "utf8"));
-if (versions[version]) {
-    console.log(`  versions.json: entry for ${version} already exists (${versions[version]})`);
+if (versions[targetVersion]) {
+    console.log(`  versions.json: entry for ${targetVersion} already exists (${versions[targetVersion]})`);
 } else {
-    versions[version] = minAppVersion;
-    writeFileSync("versions.json", JSON.stringify(versions, null, 2) + "\n");
-    console.log(`  versions.json: added ${version} -> ${minAppVersion}`);
+    versions[targetVersion] = minAppVersion;
+    writeJsonFile("versions.json", versions);
+    console.log(`  versions.json: added ${targetVersion} -> ${minAppVersion}`);
 }
 
 // --- 4. Build production ---------------------------------------------------
 console.log("\nBuilding production bundle...");
 try {
-    execSync("bun run build", { stdio: "inherit" });
+    if (isDryRun) {
+        logDryRun("would run: bun run build");
+    } else {
+        execSync("bun run build", { stdio: "inherit" });
+    }
 } catch (err) {
     console.error("\nBuild failed. Aborting release.");
     process.exit(1);
 }
 
 // --- 5. Copy artifacts to dist/<version>/ ----------------------------------
-const distDir = join("dist", version);
-rmSync(distDir, { recursive: true, force: true });
-mkdirSync(distDir, { recursive: true });
+const distDir = join("dist", targetVersion);
+if (isDryRun) {
+    logDryRun(`would remove ${distDir}/`);
+    logDryRun(`would create ${distDir}/`);
+} else {
+    rmSync(distDir, { recursive: true, force: true });
+    mkdirSync(distDir, { recursive: true });
+}
 
 console.log(`\nStaging release files in ${distDir}/`);
 const missingRequired = [];
@@ -86,7 +251,11 @@ for (const { path: file, required } of RELEASE_FILES) {
         continue;
     }
     const stagedFile = join(distDir, file);
-    copyFileSync(file, stagedFile);
+    if (isDryRun) {
+        logDryRun(`would copy ${file} -> ${stagedFile}`);
+    } else {
+        copyFileSync(file, stagedFile);
+    }
     stagedReleaseFiles.push(stagedFile);
     console.log(`  ${file}`);
 }
@@ -102,31 +271,41 @@ if (missingRequired.length > 0) {
 // --- 6. Optionally create/update GitHub Release assets ----------------------
 if (shouldPublishGithubRelease) {
     console.log(`\nPublishing GitHub Release assets for tag ${tagName}...`);
-    try {
-        execFileSync("gh", ["release", "view", tagName], { stdio: "ignore" });
-        execFileSync(
-            "gh",
-            ["release", "upload", tagName, ...stagedReleaseFiles, "--clobber"],
-            { stdio: "inherit" }
+    if (isDryRun) {
+        logDryRun(`would check whether GitHub Release ${tagName} exists`);
+        logDryRun(
+            `would upload assets with --clobber if it exists: ${stagedReleaseFiles.join(", ")}`
         );
-    } catch {
+        logDryRun(
+            `would ensure tag ${tagName} exists on origin and create the release if it does not exist`
+        );
+    } else {
         try {
-            execFileSync(
+            execFileSync("gh", ["release", "view", tagName], { stdio: "ignore" });
+            runCommand(
                 "gh",
-                [
-                    "release",
-                    "create",
-                    tagName,
-                    ...stagedReleaseFiles,
-                    "--title",
-                    tagName,
-                    "--generate-notes",
-                    "--verify-tag",
-                ],
+                ["release", "upload", tagName, ...stagedReleaseFiles, "--clobber"],
                 { stdio: "inherit" }
             );
         } catch {
-            console.error(`
+            try {
+                ensureRemoteTag(tagName);
+                runCommand(
+                    "gh",
+                    [
+                        "release",
+                        "create",
+                        tagName,
+                        ...stagedReleaseFiles,
+                        "--title",
+                        tagName,
+                        "--generate-notes",
+                        "--verify-tag",
+                    ],
+                    { stdio: "inherit" }
+                );
+            } catch {
+                console.error(`
 ERROR: could not create or update the GitHub Release.
 
 Make sure:
@@ -134,18 +313,19 @@ Make sure:
   - the tag ${tagName} exists on GitHub (git push origin ${tagName})
   - you have release permissions for this repo
 `);
-            process.exit(1);
+                process.exit(1);
+            }
         }
     }
 }
 
 // --- Done ------------------------------------------------------------------
 console.log(`
-Release ${version} prepared.
+Release ${targetVersion} prepared.
 
 Next steps:
   git add -A
-  git commit -m "Release ${version}"
+  git commit -m "Release ${targetVersion}"
   git tag ${tagName}        # if this tag does not already exist
   git push && git push origin ${tagName}
 
