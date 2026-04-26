@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of always intercepting file-tree drags.
 - Updated internal drag handling to use Obsidian's active document/window globals
   for better popout window compatibility.
+- Expanded release automation to bump versions without Bun's prefixed git tags,
+  refresh existing GitHub release assets, and publish loose release files with
+  the GitHub CLI.
+- Added a release dry-run mode to preview version, build, staging, tag, and
+  GitHub release actions without changing files or assets.
 - Reworked the README for a public audience, including current usage defaults,
   manual install steps, Bun-based build commands, platform notes, and debugging
   guidance.
