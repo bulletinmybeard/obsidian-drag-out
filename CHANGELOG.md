@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.2] - 2026-04-25
 ### Added
 - This changelog and license.
+- Local Obsidian plugin linting with `eslint-plugin-obsidianmd` and a `bun run lint`
+  script for preflight checks before community plugin submission.
 
 ### Changed
 - Default modifier key is now platform-aware: Windows and Linux default to Ctrl,
@@ -18,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   all selected items; dragging an unselected item sends only that item.
 - Updated settings copy to describe the current platform defaults and the effect
   of always intercepting file-tree drags.
+- Updated internal drag handling to use Obsidian's active document/window globals
+  for better popout window compatibility.
 - Reworked the README for a public audience, including current usage defaults,
   manual install steps, Bun-based build commands, platform notes, and debugging
   guidance.
@@ -30,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Drag icon handling no longer assumes `icon.png` is bundled. If no icon file is
   present, the plugin falls back to a tiny embedded native image so external
   drag still has a non-empty icon for macOS.
+- Addressed Obsidian review-bot lint findings for unnecessary assertions, UI
+  sentence case, explicit `any` usage, debug logging, and unused catch bindings.
 
 ### Removed
 - Original hand-written main.js test script before running esbuild.
