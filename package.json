@@ -7,7 +7,8 @@
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && bun esbuild.config.mjs production",
     "lint": "eslint main.ts manifest.json LICENSE --no-warn-ignored",
-    "release": "bun release.mjs"
+    "release": "bun release.mjs",
+    "release:github": "bun release.mjs --github"
   },
   "keywords": ["obsidian", "plugin", "drag-and-drop"],
   "author": "Xander Berry",
