@@ -12,6 +12,18 @@ import * as path from "path";
 
 type ModifierKey = "alt" | "shift" | "ctrl" | "none";
 
+interface ElectronRemoteLike {
+    getCurrentWebContents?: () => WebContents;
+}
+
+type ElectronModule = typeof import("electron");
+type ElectronModuleWithRemote = ElectronModule & {
+    remote?: ElectronRemoteLike;
+};
+type WindowWithRequire = Window & {
+    require?: (moduleName: string) => unknown;
+};
+
 interface DragOutSettings {
     /** Modifier key required to trigger external drag. "none" = always on. */
     modifierKey: ModifierKey;
@@ -35,6 +47,29 @@ const FILE_TREE_SELECTOR = ".nav-file-title, .nav-folder-title";
 const FALLBACK_ICON_DATA_URL =
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
+function isModifierKey(value: unknown): value is ModifierKey {
+    return (
+        value === "alt" ||
+        value === "shift" ||
+        value === "ctrl" ||
+        value === "none"
+    );
+}
+
+function isDragOutSettings(value: unknown): value is Partial<DragOutSettings> {
+    if (!value || typeof value !== "object") {
+        return false;
+    }
+
+    const settings = value as Partial<Record<keyof DragOutSettings, unknown>>;
+    return (
+        (settings.modifierKey === undefined ||
+            isModifierKey(settings.modifierKey)) &&
+        (settings.debugLogging === undefined ||
+            typeof settings.debugLogging === "boolean")
+    );
+}
+
 export default class DragOutPlugin extends Plugin {
     settings: DragOutSettings = DEFAULT_SETTINGS;
     private iconPath: string | null = null;
@@ -48,7 +83,7 @@ export default class DragOutPlugin extends Plugin {
         // Register dragstart at capture phase so we run before Obsidian's
         // own handler that sets the obsidian:// URI on the dataTransfer.
         this.registerDomEvent(
-            document,
+            activeDocument,
             "dragstart",
             (evt) => this.handleDragStart(evt),
             { capture: true }
@@ -100,7 +135,7 @@ export default class DragOutPlugin extends Plugin {
         if (!target) return;
 
         // Only intercept drags that originate inside the file tree.
-        const fileItem = target.closest(FILE_TREE_SELECTOR) as HTMLElement | null;
+        const fileItem = target.closest(FILE_TREE_SELECTOR);
         if (!fileItem) return;
 
         const relativePath = fileItem.getAttribute("data-path");
@@ -131,7 +166,7 @@ export default class DragOutPlugin extends Plugin {
         const webContents = this.getWebContents();
         if (!webContents) {
             new Notice(
-                "Drag Out: could not access Electron's webContents. " +
+                "Could not access Electron drag APIs. " +
                     "Check the developer console (Ctrl+Shift+I) for details."
             );
             return;
@@ -147,7 +182,7 @@ export default class DragOutPlugin extends Plugin {
             this.log("startDrag invoked", absolutePaths);
         } catch (err) {
             console.error("[DragOut] startDrag failed:", err);
-            new Notice("Drag Out: drag failed. See console for details.");
+            new Notice("Drag failed. See console for details.");
         }
     }
 
@@ -194,7 +229,7 @@ export default class DragOutPlugin extends Plugin {
         currentRelative: string,
         basePath: string
     ): string[] {
-        const selectedNodes = document.querySelectorAll(
+        const selectedNodes = activeDocument.querySelectorAll(
             ".nav-file-title.is-selected, .nav-folder-title.is-selected"
         );
 
@@ -236,24 +271,24 @@ export default class DragOutPlugin extends Plugin {
     private getWebContents(): WebContents | null {
         // Path 1: @electron/remote (modern, requires opt-in by host)
         try {
-            const electronRemote = (window as any).require?.(
+            const electronRemote = (activeWindow as WindowWithRequire).require?.(
                 "@electron/remote"
-            );
+            ) as ElectronRemoteLike | undefined;
             if (electronRemote?.getCurrentWebContents) {
                 return electronRemote.getCurrentWebContents();
             }
-        } catch (_) {
+        } catch {
             /* fall through */
         }
 
         // Path 2: legacy electron.remote (pre-Electron 14 — Obsidian still
         // exposes this on at least some versions).
         try {
-            const electron = this.requireElectron();
-            if ((electron as any).remote?.getCurrentWebContents) {
-                return (electron as any).remote.getCurrentWebContents();
+            const electron = this.requireElectron() as ElectronModuleWithRemote;
+            if (electron.remote?.getCurrentWebContents) {
+                return electron.remote.getCurrentWebContents();
             }
-        } catch (_) {
+        } catch {
             /* fall through */
         }
 
@@ -263,22 +298,24 @@ export default class DragOutPlugin extends Plugin {
     private requireElectron(): typeof import("electron") {
         // Use window.require to bypass any bundler that might have rewritten
         // a top-level require call into something else.
-        const req = (window as any).require ?? require;
-        return req("electron");
+        const req = (activeWindow as WindowWithRequire).require ?? require;
+        return req("electron") as ElectronModule;
     }
 
     private log(...args: unknown[]): void {
         if (this.settings.debugLogging) {
-            console.log("[DragOut]", ...args);
+            console.debug("[DragOut]", ...args);
         }
     }
 
     async loadSettings(): Promise<void> {
-        this.settings = Object.assign(
-            {},
-            DEFAULT_SETTINGS,
-            await this.loadData()
-        );
+        const loadedData = (await this.loadData()) as unknown;
+        const loadedSettings = isDragOutSettings(loadedData) ? loadedData : {};
+
+        this.settings = {
+            ...DEFAULT_SETTINGS,
+            ...loadedSettings,
+        };
     }
 
     async saveSettings(): Promise<void> {
@@ -308,14 +345,17 @@ class DragOutSettingTab extends PluginSettingTab {
             )
             .addDropdown((dd) =>
                 dd
-                    .addOption("ctrl", "Ctrl / Cmd (default Win/Linux)")
-                    .addOption("alt", "Alt / Option (default Mac)")
+                    .addOption("ctrl", "Ctrl/cmd (default on Windows/Linux)")
+                    .addOption("alt", "Alt/option (default on macOS)")
                     .addOption("shift", "Shift")
                     .addOption("none", "None — always intercept")
                     .setValue(this.plugin.settings.modifierKey)
                     .onChange(async (value) => {
-                        this.plugin.settings.modifierKey =
-                            value as ModifierKey;
+                        if (!isModifierKey(value)) {
+                            return;
+                        }
+
+                        this.plugin.settings.modifierKey = value;
                         await this.plugin.saveSettings();
                     })
             );
